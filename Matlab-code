@@ -1,0 +1,752 @@
+function smart_waste_simulation
+% Smart Waste Collection Simulation
+% Illustrative street network, not live GPS navigation.
+
+clc; close all;
+
+%% Settings
+initialWaste = [15 25 35 45 55 65 75 85 95 105 115 125];
+binWaste = initialWaste;
+binX = [2 5 8 11 14 17 2 5 8 11 14 17];
+binY = [8 8 8 8 8 8 3 3 3 3 3 3];
+binNames = arrayfun(@(k)sprintf('BIN-%02d',k),1:12,'UniformOutput',false);
+
+depotX = 10;
+depotY = 0.7;
+capacity = 180;
+% Illustrative assigned distances, not actual road distances.
+depotDistance = [2.4 1.6 1.1 1.8 2.7 3.2 2.1 1.3 0.9 1.5 2.3 2.9];
+
+truckLoad = 0;
+totalCollected = 0;
+totalTravelled = 0;
+tripCount = 0;
+truckX = depotX;
+truckY = depotY;
+lastX = truckX;
+lastY = truckY;
+targetBin = 0;
+targetIsDepot = false;
+autoMode = false;
+paused = false;
+pathPoints = [];
+pathIndex = 1;
+currentTripActive = false;
+currentStatus = 'Ready at depot';
+
+%% Window and dashboard
+fig = figure('Name','Smart Waste Collection Simulation',...
+    'NumberTitle','off','Color',[0.94 0.96 0.97],...
+    'Position',[40 40 1400 850],...
+    'CloseRequestFcn',@closeApp);
+
+uicontrol(fig,'Style','text',...
+    'String','SMART WASTE COLLECTION PLANNING AND OPTIMIZATION',...
+    'Units','normalized','Position',[0.03 0.945 0.94 0.04],...
+    'FontSize',16,'FontWeight','bold',...
+    'BackgroundColor',[0.94 0.96 0.97]);
+
+dashboard = uicontrol(fig,'Style','text','String','Starting simulation...',...
+    'Units','normalized','Position',[0.03 0.855 0.94 0.08],...
+    'FontSize',10,'HorizontalAlignment','left','BackgroundColor','white');
+
+ax2 = axes('Parent',fig,'Units','normalized',...
+    'Position',[0.04 0.31 0.56 0.52]);
+ax3 = axes('Parent',fig,'Units','normalized',...
+    'Position',[0.65 0.31 0.31 0.52]);
+
+%% 2D map
+drawStreetMap();
+hold(ax2,'on');
+
+plot(ax2,depotX,depotY,'p','MarkerSize',23,...
+    'MarkerFaceColor',[0.1 0.9 0.2],...
+    'MarkerEdgeColor',[0 0.25 0],'LineWidth',2.5);
+
+text(ax2,depotX,depotY+0.7,'DEPOT','FontSize',12,...
+    'FontWeight','bold','Color',[0 0.35 0],...
+    'HorizontalAlignment','center',...
+    'BackgroundColor',[0.82 1 0.82],'Margin',3);
+
+hBin2 = gobjects(1,12);
+hName2 = gobjects(1,12);
+hKg2 = gobjects(1,12);
+
+for k = 1:12
+    hBin2(k) = scatter(ax2,binX(k),binY(k),...
+        markerSize(binWaste(k)),binColor(binWaste(k)),'filled',...
+        'MarkerEdgeColor',[0.2 0.15 0.1],'LineWidth',1.3);
+
+    hName2(k) = text(ax2,binX(k),binY(k)+0.52,binNames{k},...
+        'FontSize',8,'FontWeight','bold',...
+        'HorizontalAlignment','center',...
+        'BackgroundColor',[1 1 0.72],'Margin',2);
+
+    hKg2(k) = text(ax2,binX(k),binY(k)-0.52,...
+        sprintf('%.0f kg',binWaste(k)),...
+        'FontSize',8,'FontWeight','bold',...
+        'HorizontalAlignment','center','BackgroundColor','white');
+end
+
+hRoute2 = plot(ax2,nan,nan,'-','Color',[1 0.78 0],'LineWidth',4);
+hTruck2 = plot(ax2,truckX,truckY,'s','MarkerSize',13,...
+    'MarkerFaceColor',[0.1 0.3 1],...
+    'MarkerEdgeColor','white','LineWidth',2);
+
+hTruckLabel2 = text(ax2,truckX+0.4,truckY+0.25,'TRUCK',...
+    'FontSize',9,'FontWeight','bold','Color',[0 0.1 0.6]);
+
+title(ax2,'2D ROAD NETWORK AND COLLECTION ROUTE','FontWeight','bold');
+xlabel(ax2,'Illustrative X coordinate');
+ylabel(ax2,'Illustrative Y coordinate');
+xlim(ax2,[0 19]); ylim(ax2,[-0.5 11]);
+axis(ax2,'equal'); grid(ax2,'on');
+
+%% 3D street scene
+draw3DScene();
+hold(ax3,'on');
+
+hBinBody = gobjects(1,12);
+hBinFill = gobjects(1,12);
+hName3 = gobjects(1,12);
+
+for k = 1:12
+    [bx,by,bz] = cylinder([0.25 0.29],24);
+    bz = bz*1.25;
+
+    hBinBody(k) = surf(ax3,bx+binX(k),by+binY(k),bz,...
+        'FaceColor',[0.12 0.48 0.78],...
+        'EdgeColor',[0.08 0.2 0.3],'LineWidth',0.5);
+
+    hBinFill(k) = makeWasteFill(ax3,binX(k),binY(k),binWaste(k));
+
+    hName3(k) = text(ax3,binX(k),binY(k),1.65,...
+        sprintf('%s\n%.0f kg',binNames{k},binWaste(k)),...
+        'FontSize',7,'FontWeight','bold',...
+        'HorizontalAlignment','center',...
+        'BackgroundColor','white','Margin',2);
+end
+
+scatter3(ax3,depotX,depotY,0.5,230,'p','filled',...
+    'MarkerFaceColor',[0.1 0.9 0.2],...
+    'MarkerEdgeColor',[0 0.25 0],'LineWidth',2);
+
+text(ax3,depotX,depotY,1.4,'DEPOT',...
+    'FontSize',10,'FontWeight','bold',...
+    'HorizontalAlignment','center','Color',[0 0.35 0]);
+
+hRoute3 = plot3(ax3,nan,nan,nan,'-',...
+    'Color',[1 0.75 0],'LineWidth',3);
+
+hTruck3 = scatter3(ax3,truckX,truckY,0.8,170,'s','filled',...
+    'MarkerFaceColor',[0.1 0.3 1],...
+    'MarkerEdgeColor','white','LineWidth',1.5);
+
+hTruckLabel3 = text(ax3,truckX,truckY,1.25,'TRUCK',...
+    'FontSize',8,'FontWeight','bold',...
+    'Color',[0 0.1 0.6],'HorizontalAlignment','center');
+
+title(ax3,'3D WASTE BINS AND FILL LEVELS','FontWeight','bold');
+xlabel(ax3,'X'); ylabel(ax3,'Y'); zlabel(ax3,'Height');
+xlim(ax3,[0 19]); ylim(ax3,[-0.5 11]); zlim(ax3,[0 4.5]);
+view(ax3,42,27); grid(ax3,'on'); box(ax3,'on');
+
+%% Controls
+uicontrol(fig,'Style','pushbutton','String','EDIT BIN KG',...
+    'Units','normalized','Position',[0.04 0.215 0.14 0.055],...
+    'FontSize',10,'FontWeight','bold',...
+    'BackgroundColor',[1 0.83 0.3],'Callback',@editWeights);
+
+uicontrol(fig,'Style','pushbutton','String','START AUTO COLLECTION',...
+    'Units','normalized','Position',[0.195 0.215 0.19 0.055],...
+    'FontSize',10,'FontWeight','bold',...
+    'BackgroundColor',[0.3 0.85 0.4],'Callback',@startAuto);
+
+uicontrol(fig,'Style','pushbutton','String','NEXT BIN',...
+    'Units','normalized','Position',[0.4 0.215 0.11 0.055],...
+    'FontSize',10,'Callback',@nextBin);
+
+uicontrol(fig,'Style','pushbutton','String','PAUSE / RESUME',...
+    'Units','normalized','Position',[0.525 0.215 0.14 0.055],...
+    'FontSize',10,'Callback',@pauseResume);
+
+uicontrol(fig,'Style','pushbutton','String','RESET SIMULATION',...
+    'Units','normalized','Position',[0.68 0.215 0.15 0.055],...
+    'FontSize',10,'BackgroundColor',[1 0.65 0.6],...
+    'Callback',@resetSimulation);
+
+uicontrol(fig,'Style','text',...
+    'String','GREEN = DEPOT | ORANGE/RED = BINS | BLUE = TRUCK | YELLOW = ROUTE',...
+    'Units','normalized','Position',[0.04 0.16 0.92 0.035],...
+    'FontSize',9,'FontWeight','bold',...
+    'BackgroundColor',[0.94 0.96 0.97]);
+
+statusText = uicontrol(fig,'Style','text','String',currentStatus,...
+    'Units','normalized','Position',[0.04 0.105 0.92 0.045],...
+    'FontSize',10,'FontWeight','bold','BackgroundColor','white');
+
+uicontrol(fig,'Style','text',...
+    'String','Illustrative road grid and assigned distances only; not live GPS or verified road data.',...
+    'Units','normalized','Position',[0.04 0.045 0.92 0.035],...
+    'FontSize',8,'BackgroundColor',[0.94 0.96 0.97]);
+
+moveTimer = timer('ExecutionMode','fixedSpacing',...
+    'Period',0.10,'BusyMode','drop','TimerFcn',@moveTruck);
+
+updateDisplay();
+
+%% Button callbacks
+    function editWeights(~,~)
+        prompts = cell(1,12);
+        defaults = cell(1,12);
+
+        for q = 1:12
+            prompts{q} = sprintf('%s waste (kg):',binNames{q});
+            defaults{q} = num2str(binWaste(q));
+        end
+
+        answer = inputdlg(prompts,'Edit bin weights',[1 35],defaults);
+        if isempty(answer), return; end
+
+        values = zeros(1,12);
+        for q = 1:12
+            values(q) = str2double(answer{q});
+            if ~isfinite(values(q)) || values(q) < 0
+                errordlg('Enter valid non-negative kg values.','Invalid input');
+                return;
+            end
+        end
+
+        binWaste = values;
+        refreshGraphics();
+        currentStatus = 'Bin weights updated.';
+        updateDisplay();
+    end
+
+    function startAuto(~,~)
+        autoMode = true;
+        paused = false;
+
+        if isempty(pathPoints)
+            if truckLoad >= capacity
+                goToDepot();
+            else
+                selectNextHighestBin();
+            end
+        end
+
+        ensureTimer();
+        currentStatus = 'Automatic collection: highest remaining waste first.';
+        updateDisplay();
+    end
+
+    function nextBin(~,~)
+        autoMode = false;
+        paused = false;
+
+        if isempty(pathPoints)
+            if truckLoad >= capacity
+                goToDepot();
+            else
+                selectNextHighestBin();
+            end
+        end
+
+        ensureTimer();
+        updateDisplay();
+    end
+
+    function pauseResume(~,~)
+        if paused
+            paused = false;
+            ensureTimer();
+            currentStatus = 'Simulation resumed.';
+        else
+            paused = true;
+            if isvalid(moveTimer) && strcmp(moveTimer.Running,'on')
+                stop(moveTimer);
+            end
+            currentStatus = 'Simulation paused.';
+        end
+        updateDisplay();
+    end
+
+    function resetSimulation(~,~)
+        autoMode = false;
+        paused = false;
+
+        if isvalid(moveTimer) && strcmp(moveTimer.Running,'on')
+            stop(moveTimer);
+        end
+
+        binWaste = initialWaste;
+        truckLoad = 0;
+        totalCollected = 0;
+        totalTravelled = 0;
+        tripCount = 0;
+        truckX = depotX;
+        truckY = depotY;
+        lastX = truckX;
+        lastY = truckY;
+        targetBin = 0;
+        targetIsDepot = false;
+        pathPoints = [];
+        pathIndex = 1;
+        currentTripActive = false;
+
+        set(hRoute2,'XData',nan,'YData',nan);
+        set(hRoute3,'XData',nan,'YData',nan,'ZData',nan);
+        set(hTruck2,'XData',truckX,'YData',truckY);
+        set(hTruck3,'XData',truckX,'YData',truckY,'ZData',0.8);
+
+        currentStatus = 'Reset complete. Truck is at depot.';
+        refreshGraphics();
+        updateDisplay();
+    end
+
+%% Choose next bin by descending remaining waste
+    function selectNextHighestBin()
+        available = find(binWaste > 0);
+
+        if isempty(available)
+            currentStatus = 'All bins are empty. Collection complete.';
+            autoMode = false;
+            pathPoints = [];
+            if isvalid(moveTimer) && strcmp(moveTimer.Running,'on')
+                stop(moveTimer);
+            end
+            updateDisplay();
+            return;
+        end
+
+        [~,order] = sort(binWaste(available),'descend');
+        targetBin = available(order(1));
+        targetIsDepot = false;
+
+        if ~currentTripActive
+            tripCount = tripCount + 1;
+            currentTripActive = true;
+        end
+
+        pathPoints = makeRoadRoute(truckX,truckY,...
+            binX(targetBin),binY(targetBin));
+        pathIndex = min(2,size(pathPoints,1));
+
+        set(hRoute2,'XData',pathPoints(:,1),'YData',pathPoints(:,2));
+        set(hRoute3,'XData',pathPoints(:,1),...
+            'YData',pathPoints(:,2),...
+            'ZData',0.22*ones(size(pathPoints,1),1));
+
+        currentStatus = sprintf('Following road to %s (%.1f kg).',...
+            binNames{targetBin},binWaste(targetBin));
+        updateDisplay();
+    end
+
+    function goToDepot()
+        targetBin = 0;
+        targetIsDepot = true;
+
+        pathPoints = makeRoadRoute(truckX,truckY,depotX,depotY);
+        pathIndex = min(2,size(pathPoints,1));
+
+        set(hRoute2,'XData',pathPoints(:,1),'YData',pathPoints(:,2));
+        set(hRoute3,'XData',pathPoints(:,1),...
+            'YData',pathPoints(:,2),...
+            'ZData',0.22*ones(size(pathPoints,1),1));
+
+        currentStatus = 'Returning to depot to unload.';
+        ensureTimer();
+        updateDisplay();
+    end
+
+%% Truck animation
+    function moveTruck(~,~)
+        if ~ishandle(fig) || paused
+            return;
+        end
+
+        if isempty(pathPoints) || pathIndex > size(pathPoints,1)
+            if targetIsDepot
+                truckX = depotX;
+                truckY = depotY;
+                lastX = truckX;
+                lastY = truckY;
+
+                set(hTruck2,'XData',truckX,'YData',truckY);
+                set(hTruck3,'XData',truckX,'YData',truckY,'ZData',0.8);
+
+                truckLoad = 0;
+                targetIsDepot = false;
+                currentTripActive = false;
+                pathPoints = [];
+
+                set(hRoute2,'XData',nan,'YData',nan);
+                set(hRoute3,'XData',nan,'YData',nan,'ZData',nan);
+
+                currentStatus = 'At depot: truck unloaded.';
+
+                if autoMode && any(binWaste > 0)
+                    selectNextHighestBin();
+                elseif isvalid(moveTimer) && strcmp(moveTimer.Running,'on')
+                    stop(moveTimer);
+                end
+
+                updateDisplay();
+                return;
+            end
+
+            if targetBin > 0
+                collectAtBin(targetBin);
+                targetBin = 0;
+            end
+
+            pathPoints = [];
+
+            if autoMode
+                if any(binWaste > 0)
+                    if truckLoad >= capacity
+                        goToDepot();
+                    else
+                        selectNextHighestBin();
+                    end
+                else
+                    currentStatus = 'All bins collected. Simulation complete.';
+                    autoMode = false;
+                    if isvalid(moveTimer) && strcmp(moveTimer.Running,'on')
+                        stop(moveTimer);
+                    end
+                end
+            elseif truckLoad >= capacity
+                goToDepot();
+            elseif isvalid(moveTimer) && strcmp(moveTimer.Running,'on')
+                stop(moveTimer);
+            end
+
+            updateDisplay();
+            return;
+        end
+
+        truckX = pathPoints(pathIndex,1);
+        truckY = pathPoints(pathIndex,2);
+
+        totalTravelled = totalTravelled + hypot(...
+            truckX-lastX,truckY-lastY);
+
+        lastX = truckX;
+        lastY = truckY;
+        pathIndex = pathIndex + 1;
+
+        set(hTruck2,'XData',truckX,'YData',truckY);
+        set(hTruck3,'XData',truckX,'YData',truckY,'ZData',0.8);
+        set(hTruckLabel2,'Position',[truckX+0.4 truckY+0.25 0]);
+        set(hTruckLabel3,'Position',[truckX truckY 1.25]);
+
+        drawnow limitrate;
+        updateDisplay();
+    end
+
+%% Capacity-limited collection
+    function collectAtBin(k)
+        freeCapacity = max(0,capacity-truckLoad);
+        amount = min(binWaste(k),freeCapacity);
+
+        binWaste(k) = binWaste(k)-amount;
+        truckLoad = truckLoad+amount;
+        totalCollected = totalCollected+amount;
+
+        refreshGraphics();
+
+        if truckLoad >= capacity
+            currentStatus = sprintf(...
+                '%.0f kg limit reached. Remaining bin waste stays in the bin.',capacity);
+            goToDepot();
+        else
+            currentStatus = sprintf('Collected %.1f kg from %s.',...
+                amount,binNames{k});
+        end
+    end
+
+    function ensureTimer()
+        if ~paused && isvalid(moveTimer) && strcmp(moveTimer.Running,'off')
+            start(moveTimer);
+        end
+    end
+
+%% Refresh 2D and 3D bins safely
+    function refreshGraphics()
+        for q = 1:12
+            color = binColor(binWaste(q));
+
+            if ~isgraphics(hBin2(q))
+                hBin2(q) = scatter(ax2,binX(q),binY(q),...
+                    markerSize(binWaste(q)),color,'filled');
+            end
+
+            set(hBin2(q),'XData',binX(q),'YData',binY(q),...
+                'SizeData',markerSize(binWaste(q)),'CData',color);
+
+            set(hName2(q),'Position',[binX(q) binY(q)+0.52 0],...
+                'String',binNames{q});
+            set(hKg2(q),'Position',[binX(q) binY(q)-0.52 0],...
+                'String',sprintf('%.0f kg',binWaste(q)));
+
+            % Recreate missing 3D bin body if needed
+            if ~isgraphics(hBinBody(q))
+                [bx,by,bz] = cylinder([0.25 0.29],24);
+                bz = bz*1.25;
+                hBinBody(q) = surf(ax3,bx+binX(q),by+binY(q),bz,...
+                    'FaceColor',[0.12 0.48 0.78],...
+                    'EdgeColor',[0.08 0.2 0.3]);
+            end
+
+            [bx,by,bz] = cylinder([0.25 0.29],24);
+            set(hBinBody(q),'XData',bx+binX(q),...
+                'YData',by+binY(q),'ZData',bz*1.25);
+
+            if isgraphics(hBinFill(q))
+                delete(hBinFill(q));
+            end
+            hBinFill(q) = makeWasteFill(ax3,binX(q),binY(q),binWaste(q));
+
+            set(hName3(q),'Position',[binX(q) binY(q) 1.65],...
+                'String',sprintf('%s\n%.0f kg',binNames{q},binWaste(q)));
+        end
+        drawnow limitrate;
+    end
+
+%% Dashboard
+    function updateDisplay()
+        remaining = sum(binWaste);
+        free = max(0,capacity-truckLoad);
+        available = find(binWaste > 0);
+
+        if isempty(available)
+            nearest = 'None';
+        else
+            distances = hypot(binX(available)-truckX,...
+                binY(available)-truckY);
+            [dmin,j] = min(distances);
+            nearest = sprintf('%s (%.1f map units)',...
+                binNames{available(j)},dmin);
+        end
+
+        if targetBin > 0
+            assigned = sprintf('%s: %.1f assigned units',...
+                binNames{targetBin},depotDistance(targetBin));
+        else
+            assigned = 'Depot / none';
+        end
+
+        set(dashboard,'String',sprintf([...
+            'Truck load: %.1f / %.0f kg    Free capacity: %.1f kg\n' ...
+            'Truck position: (%.1f, %.1f)    Nearest bin: %s\n' ...
+            'Total collected: %.1f kg    Remaining waste: %.1f kg\n' ...
+            'Travelled: %.2f illustrative map units    Trips started: %d    Assigned depot distance: %s'],...
+            truckLoad,capacity,free,truckX,truckY,nearest,...
+            totalCollected,remaining,totalTravelled,tripCount,assigned));
+
+        if isgraphics(statusText)
+            set(statusText,'String',currentStatus);
+        end
+        drawnow limitrate;
+    end
+
+%% Draw 2D roads and illustrative buildings
+    function drawStreetMap()
+        cla(ax2);
+        hold(ax2,'on');
+        set(ax2,'Color',[0.88 0.92 0.82]);
+
+        roadColor = [0.60 0.63 0.66];
+
+        for yy = [1.5 5.5 9.5]
+            plot(ax2,[0 19],[yy yy],'-','Color',roadColor,'LineWidth',15);
+            plot(ax2,[0 19],[yy yy],'--','Color','white','LineWidth',1.2);
+        end
+
+        for xx = [1 4 7 10 13 16 18]
+            plot(ax2,[xx xx],[-0.5 11],'-','Color',roadColor,'LineWidth',15);
+            plot(ax2,[xx xx],[-0.5 11],'--','Color','white','LineWidth',1.2);
+        end
+
+        buildingColors = [0.92 0.78 0.62;
+                          0.80 0.86 0.95;
+                          0.94 0.89 0.68;
+                          0.83 0.91 0.80];
+
+        for xx = [2.5 5.5 8.5 11.5 14.5 17]
+            for yy = [3.3 7.3]
+                ci = mod(round(xx*2+yy),4)+1;
+                rectangle(ax2,'Position',[xx-0.58 yy-0.48 1.16 0.96],...
+                    'FaceColor',buildingColors(ci,:),...
+                    'EdgeColor',[0.35 0.35 0.35]);
+
+                if yy < 5
+                    label = 'SHOP';
+                else
+                    label = 'HOUSE';
+                end
+
+                text(ax2,xx,yy,label,'FontSize',6,...
+                    'HorizontalAlignment','center','Color',[0.2 0.2 0.2]);
+            end
+        end
+
+        text(ax2,0.4,10.35,'SUBURBAN STREET GRID',...
+            'FontSize',9,'FontWeight','bold','Color',[0.1 0.2 0.15]);
+    end
+
+%% Draw 3D ground, road strips and buildings
+    function draw3DScene()
+        cla(ax3);
+        hold(ax3,'on');
+        set(ax3,'Color',[0.94 0.97 0.98]);
+
+        [gx,gy] = meshgrid(0:19,0:11);
+        surf(ax3,gx,gy,zeros(size(gx)),...
+            'FaceColor',[0.82 0.87 0.77],...
+            'EdgeColor','none','FaceAlpha',0.65);
+
+        for yy = [1.5 5.5 9.5]
+            surf(ax3,[0 19;0 19],...
+                [yy-0.42 yy-0.42;yy+0.42 yy+0.42],...
+                0.03*ones(2,2),'FaceColor',[0.45 0.48 0.51],...
+                'EdgeColor','none');
+        end
+
+        for xx = [1 4 7 10 13 16 18]
+            surf(ax3,[xx-0.42 xx+0.42;xx-0.42 xx+0.42],...
+                [0 0;11 11],0.035*ones(2,2),...
+                'FaceColor',[0.45 0.48 0.51],'EdgeColor','none');
+        end
+
+        for xx = [2.5 5.5 8.5 11.5 14.5 17]
+            for yy = [3.3 7.3]
+                height = 1.15+0.35*mod(round(xx+yy),3);
+                drawBuildingBlock(xx-0.55,yy-0.45,1.1,0.9,height);
+            end
+        end
+    end
+
+    function drawBuildingBlock(x,y,w,d,h)
+        vertices = [x y 0; x+w y 0; x+w y+d 0; x y+d 0; ...
+                    x y h; x+w y h; x+w y+d h; x y+d h];
+        faces = [1 2 3 4; 5 6 7 8; 1 2 6 5; ...
+                 2 3 7 6; 3 4 8 7; 4 1 5 8];
+
+        patch(ax3,'Vertices',vertices,'Faces',faces,...
+            'FaceColor',[0.78 0.82 0.88],...
+            'EdgeColor',[0.4 0.45 0.5],'FaceAlpha',0.72);
+    end
+
+    function closeApp(~,~)
+        try
+            if isvalid(moveTimer)
+                stop(moveTimer);
+                delete(moveTimer);
+            end
+        catch
+        end
+        if ishandle(fig)
+            delete(fig);
+        end
+    end
+end
+
+%% Route follows street-grid junctions instead of a diagonal shortcut
+function points = makeRoadRoute(x1,y1,x2,y2)
+roadX = [1 4 7 10 13 16 18];
+roadY = [1.5 5.5 9.5];
+
+[~,ix1] = min(abs(roadX-x1));
+[~,iy1] = min(abs(roadY-y1));
+[~,ix2] = min(abs(roadX-x2));
+[~,iy2] = min(abs(roadY-y2));
+
+% Access paths connect bins/depot to the nearest street.
+startAccess = [x1 y1; x1 roadY(iy1); roadX(ix1) roadY(iy1)];
+endAccess = [roadX(ix2) roadY(iy2); x2 roadY(iy2); x2 y2];
+
+ix = ix1;
+iy = iy1;
+junctions = [roadX(ix) roadY(iy)];
+
+% Horizontal travel via road junctions.
+while ix ~= ix2
+    if ix < ix2
+        ix = ix+1;
+    else
+        ix = ix-1;
+    end
+    junctions(end+1,:) = [roadX(ix) roadY(iy)]; %#ok<AGROW>
+end
+
+% Turn at junction, then travel along the vertical road.
+while iy ~= iy2
+    if iy < iy2
+        iy = iy+1;
+    else
+        iy = iy-1;
+    end
+    junctions(end+1,:) = [roadX(ix) roadY(iy)]; %#ok<AGROW>
+end
+
+raw = [startAccess; junctions; endAccess];
+keep = [true; any(diff(raw,1,1)~=0,2)];
+raw = raw(keep,:);
+
+% Smooth the truck animation along each road segment.
+points = [];
+for n = 1:size(raw,1)-1
+    a = raw(n,:);
+    b = raw(n+1,:);
+    count = max(2,ceil(norm(b-a)*3));
+
+    segment = [linspace(a(1),b(1),count)',...
+               linspace(a(2),b(2),count)'];
+
+    if n > 1
+        segment = segment(2:end,:);
+    end
+    points = [points; segment]; %#ok<AGROW>
+end
+
+if isempty(points)
+    points = [x1 y1; x2 y2];
+end
+end
+
+%% 3D bin waste surface
+function h = makeWasteFill(ax,x,y,kg)
+maxKg = 125;
+fillHeight = 1.15*min(max(kg/maxKg,0),1);
+[fx,fy,fz] = cylinder(0.225,24);
+fz = fz*fillHeight;
+
+if kg >= 100
+    fillColor = [0.9 0.12 0.08];
+elseif kg >= 50
+    fillColor = [1 0.62 0.05];
+elseif kg > 0
+    fillColor = [0.12 0.75 0.3];
+else
+    fillColor = [0.7 0.75 0.78];
+end
+
+h = surf(ax,fx+x,fy+y,fz+0.07,...
+    'FaceColor',fillColor,'EdgeColor','none','FaceAlpha',0.96);
+end
+
+function s = markerSize(kg)
+s = 45+min(max(kg,0),180)*1.4;
+end
+
+function c = binColor(kg)
+if kg <= 0
+    c = [0.55 0.75 0.58];
+elseif kg >= 100
+    c = [1 0.18 0.1];
+else
+    c = [1 0.55 0.05];
+end
+end
