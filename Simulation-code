@@ -1,0 +1,186 @@
+#include <LiquidCrystal.h>
+
+// LCD: RS, E, D4, D5, D6, D7
+LiquidCrystal lcd(12, 11, 5, 4, 3, 2);
+
+// Project settings
+const int BIN_COUNT = 12;
+const int TRUCK_CAPACITY = 180;
+
+int waste[BIN_COUNT] = {
+  15, 25, 35, 45, 55, 65,
+  75, 85, 95, 105, 115, 125
+};
+
+int totalCollected = 0;
+int totalTrips = 0;
+int initialWaste = 0;
+int remainingWaste = 0;
+
+int screen = 0;
+unsigned long lastScreenChange = 0;
+const unsigned long screenInterval = 2500;
+
+// Calculate waste collection using truck capacity
+void runSimulation() {
+  for (int i = 0; i < BIN_COUNT; i++) {
+    initialWaste += waste[i];
+  }
+
+  while (true) {
+    int truckLoad = 0;
+    bool collected = false;
+
+    while (truckLoad < TRUCK_CAPACITY) {
+      int target = -1;
+      int largest = 0;
+
+      for (int i = 0; i < BIN_COUNT; i++) {
+        if (waste[i] > largest) {
+          largest = waste[i];
+          target = i;
+        }
+      }
+
+      if (target == -1) {
+        break;
+      }
+
+      int freeSpace = TRUCK_CAPACITY - truckLoad;
+      int amount = min(waste[target], freeSpace);
+
+      waste[target] -= amount;
+      truckLoad += amount;
+      totalCollected += amount;
+      collected = true;
+    }
+
+    if (!collected) {
+      break;
+    }
+
+    totalTrips++;
+  }
+
+  for (int i = 0; i < BIN_COUNT; i++) {
+    remainingWaste += waste[i];
+  }
+}
+
+// Show information on LCD
+void showScreen(int page) {
+  lcd.clear();
+
+  switch (page) {
+    case 0:
+      lcd.setCursor(0, 0);
+      lcd.print("SMART WASTE");
+      lcd.setCursor(0, 1);
+      lcd.print("COLLECTION SYS");
+      break;
+
+    case 1:
+      lcd.setCursor(0, 0);
+      lcd.print("Total Waste:");
+      lcd.setCursor(0, 1);
+      lcd.print(totalCollected);
+      lcd.print(" kg collected");
+      break;
+
+    case 2:
+      lcd.setCursor(0, 0);
+      lcd.print("Truck Capacity:");
+      lcd.setCursor(0, 1);
+      lcd.print(TRUCK_CAPACITY);
+      lcd.print(" kg");
+      break;
+
+    case 3:
+      lcd.setCursor(0, 0);
+      lcd.print("Total Trips:");
+      lcd.setCursor(0, 1);
+      lcd.print(totalTrips);
+      lcd.print(" trips done");
+      break;
+
+    case 4:
+      lcd.setCursor(0, 0);
+      lcd.print("Bins Processed:");
+      lcd.setCursor(0, 1);
+      lcd.print(BIN_COUNT);
+      lcd.print(" / ");
+      lcd.print(BIN_COUNT);
+      lcd.print(" bins");
+      break;
+
+    case 5:
+      lcd.setCursor(0, 0);
+      lcd.print("Progress:");
+      lcd.setCursor(0, 1);
+
+      if (initialWaste > 0) {
+        int progress =
+          (totalCollected * 100L) / initialWaste;
+        lcd.print(progress);
+        lcd.print("% completed");
+      } else {
+        lcd.print("0% completed");
+      }
+      break;
+
+    case 6:
+      lcd.setCursor(0, 0);
+      lcd.print("Waste Remaining:");
+      lcd.setCursor(0, 1);
+      lcd.print(remainingWaste);
+      lcd.print(" kg");
+      break;
+
+    case 7:
+      lcd.setCursor(0, 0);
+      lcd.print("SIMULATION");
+      lcd.setCursor(0, 1);
+
+      if (remainingWaste == 0) {
+        lcd.print("COMPLETED!");
+      } else {
+        lcd.print("IN PROGRESS");
+      }
+      break;
+
+    default:
+      lcd.setCursor(0, 0);
+      lcd.print("Thank You!");
+      lcd.setCursor(0, 1);
+      lcd.print("Smart City");
+      break;
+  }
+}
+
+void setup() {
+  lcd.begin(16, 2);
+
+  lcd.setCursor(0, 0);
+  lcd.print("SMART WASTE");
+  lcd.setCursor(0, 1);
+  lcd.print("Starting...");
+  delay(2000);
+
+  runSimulation();
+
+  showScreen(screen);
+  lastScreenChange = millis();
+}
+
+void loop() {
+  if (millis() - lastScreenChange >= screenInterval) {
+    screen++;
+
+    if (screen > 8) {
+      screen = 0;
+    }
+
+    showScreen(screen);
+    lastScreenChange = millis();
+  }
+}
